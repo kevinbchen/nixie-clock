@@ -1,0 +1,4 @@
+(fp_lib_table
+  (lib (name "nixies-us")(type "Legacy")(uri "C:/files/projects/kicad/libraries/nixies-us.mod")(options "")(descr "")(disabled))
+  (lib (name "nixie_clock")(type "KiCad")(uri "C:/files/projects/kicad/nixie-clock/nixie_clock.pretty")(options "")(descr ""))
+)

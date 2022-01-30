@@ -1,0 +1,5 @@
+https://0x7d.com/2017/nixie-tube-clock/
+https://web.jfet.org/nixie-1/NixieTransistors.pdf
+https://leap.tardate.com/electronics101/555timer/nixiepowersupply/
+https://threeneurons.wordpress.com/nixie-power-supply/
+https://www.dos4ever.com/flyback/flyback.html#ind2
