@@ -4,6 +4,12 @@
 
   (paper "A4")
 
+  (title_block
+    (title "Nixie Clock Main Board")
+    (date "2022-01-29")
+    (rev "1")
+  )
+
   (lib_symbols
     (symbol "Connector:AVR-ISP-6" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
       (property "Reference" "J" (id 0) (at -6.35 11.43 0)
