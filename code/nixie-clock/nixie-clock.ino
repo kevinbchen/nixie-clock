@@ -32,7 +32,7 @@ uint8_t pwmPins[] = {EN4, EN3, EN5, EN2, EN1};
 // RTC
 RTC_DS3231 rtc;
 DateTime dateTime;
-uint8_t lastSecond = 0;
+DateTime prevDateTime;
 
 // Digits
 uint16_t digitsData = 0x0000;
@@ -45,7 +45,7 @@ enum DisplayState {
   TimeSeconds,  // mm:ss
   Date,         // MM:dd
   Year,         // yyyy
-  Brightness,   // 1 :XX
+  Brightness,   // 1 : X
   DePoison,     // de-poison
   NumStates
 };
@@ -77,12 +77,17 @@ struct EditRange {
 DisplayState displayState = DisplayState::Time;
 uint8_t displayValues[] = {0, 0};
 unsigned long lastUpdateTime = 0;
+
+bool dePoisonMode = false;
 unsigned long dePoisonTime = 0;
 unsigned long dePoisonTimes[] = {1300, 2000, 2750, 3300, 5000};
 uint8_t dePoisonTimeIndex = 0;
 uint8_t dePoisonDigits[4];
 uint8_t dePoisonPermutation[] = {0, 1, 2, 3};
 bool dePoisonDone[4];
+int dePoisonIter = 0;
+uint8_t dePoisonPeriodMinutes = 30;
+uint8_t dePoisonIterations = 5;
 
 // Editing is done on 2-digit values (hours, minutes, etc.)
 bool editMode = false;
@@ -154,7 +159,7 @@ void setDigits(uint8_t number1, uint8_t number2) {
 }
 
 void updatePWM() {
-  if (displayState == DisplayState::DePoison) {
+  if (dePoisonMode && !editMode) {
     for (int i = 0; i < 5; i++) {
       analogWrite(pwmPins[i], 255);
     }
@@ -209,41 +214,24 @@ void getDisplayValues(uint8_t values[2]) {
   }
 }
 
-
 void updateDisplay() {
   if (editMode) {
     setDigits(editValues[0], editValues[1]);
-  } else if (displayState == DisplayState::DePoison) {
-    unsigned long deltaTime = millis() - lastUpdateTime;
-    if (deltaTime > 20) {
-      lastUpdateTime = millis();
-      dePoisonTime += deltaTime;
-      if (dePoisonTime >= dePoisonTimes[dePoisonTimeIndex]) {
-        if (dePoisonTimeIndex < 4) {
-          dePoisonDone[dePoisonPermutation[dePoisonTimeIndex]] = true;
-          toDigitsArray(dateTime.hour(), dateTime.minute(), digits);
-          dePoisonTimeIndex++;
-        } else {
-          dePoisonReset();
-          return;
-        }
-      }
-      for (int i = 0; i < 4; i++) {
-        if (!dePoisonDone[i]) {
-          digits[i] = random(0, 10);
-        }
-      }
-      updateDigits();
-    }
   } else {
-    getDisplayValues(displayValues);
-    setDigits(displayValues[0], displayValues[1]);
+    if (dePoisonMode) {
+      dePoisonUpdate();
+    } else {
+      getDisplayValues(displayValues);
+      setDigits(displayValues[0], displayValues[1]);
+    }
   }
 }
 
 void enterEditMode() {
-  getDisplayValues(editValues);
+  dePoisonStop();
   editMode = true;
+  getDisplayValues(editValues);
+  updateDisplay();
   setEditIndex(1);
 }
 
@@ -303,10 +291,41 @@ void setEditIndex(int index) {
 void setDisplayState(DisplayState newDisplayState) {
   displayState = newDisplayState;
   if (displayState == DisplayState::DePoison) {
-    dePoisonReset();
+    dePoisonStart();
+  } else {
+    dePoisonStop();
   }
   updateDisplay();
   updatePWM();
+}
+
+void dePoisonUpdate() {
+  unsigned long deltaTime = millis() - lastUpdateTime;
+  if (deltaTime > 20) {
+    lastUpdateTime = millis();
+    dePoisonTime += deltaTime;
+    if (dePoisonTime >= dePoisonTimes[dePoisonTimeIndex]) {
+      if (dePoisonTimeIndex < 4) {
+        dePoisonDone[dePoisonPermutation[dePoisonTimeIndex]] = true;
+        getDisplayValues(displayValues);
+        toDigitsArray(displayValues[0], displayValues[1], digits);
+        dePoisonTimeIndex++;
+      } else {
+        dePoisonReset();
+        dePoisonIter++;
+        if (dePoisonIter >= dePoisonIterations) {
+          dePoisonStop();
+        }
+        return;
+      }
+    }
+    for (int i = 0; i < 4; i++) {
+      if (!dePoisonDone[i]) {
+        digits[i] = random(0, 10);
+      }
+    }
+    updateDigits();
+  }
 }
 
 void dePoisonReset() {
@@ -325,26 +344,49 @@ void dePoisonReset() {
   }
 }
 
+void dePoisonStart() {
+  if (dePoisonMode) {
+    return;
+  }
+  dePoisonReset();
+  dePoisonIter = 0;
+  dePoisonMode = true;
+  updatePWM();
+}
+
+void dePoisonStop() {
+  if (displayState != DisplayState::DePoison) {
+    dePoisonMode = false;
+    updatePWM();
+  }
+}
+
 void loop() {
   // Update time
+  prevDateTime = dateTime;
   dateTime = rtc.now();
-  bool timeChanged = lastSecond != dateTime.second();
-  lastSecond = dateTime.second();
+  bool timeChanged = dateTime.second() != prevDateTime.second();
 
   // Check encoder
   encoder.tick();
   int encoderDelta = (encoder.getPosition() - lastEncoderPosition);
   lastEncoderPosition = encoder.getPosition();
 
-  // Update pwm pattern
   if (timeChanged) {
+    // Update pwm pattern
     const int numPatterns = (sizeof(pwmPatterns[0]) / sizeof(pwmPatterns[0][0]));
     pwmPatternIndex = (pwmPatternIndex + 1) % numPatterns;
     updatePWM();
+
+    // Enable de-poison if needed
+    if (dateTime.minute() != prevDateTime.minute() &&
+        dateTime.minute() % dePoisonPeriodMinutes == 0) {
+      dePoisonStart();
+    }
   }
 
   if (!editMode) {
-    if (timeChanged || displayState == DisplayState::DePoison) {
+    if (timeChanged || dePoisonMode) {
       updateDisplay();
     }
     if (buttonA.pressed() && displayState != DisplayState::DePoison) {
