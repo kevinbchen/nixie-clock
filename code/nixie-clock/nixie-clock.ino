@@ -34,10 +34,13 @@ RTC_DS3231 rtc;
 DateTime dateTime;
 DateTime prevDateTime;
 
+// Settings
+uint8_t brightness = 5;
+bool twentyFourHours = true;
+
 // Digits
 uint16_t digitsData = 0x0000;
 uint8_t digits[4] = {0};
-uint8_t brightness = 5;
 
 // Main display states
 enum DisplayState {
@@ -46,6 +49,7 @@ enum DisplayState {
   Date,         // MM:dd
   Year,         // yyyy
   Brightness,   // 1 : X
+  TwentyFour,   // 1 :XX
   DePoison,     // de-poison
   NumStates
 };
@@ -57,6 +61,7 @@ uint8_t pwmPatterns[][2] = {
   {B11111, B11111},   // MM:dd
   {B11011, B11011},   // yyyy
   {B10111, B10111},   // 1 : X
+  {B10111, B10111},   // 1 :XX
   {B11111, B11011},   // de-poison
 };
 uint8_t pwmPatternIndex = 0;
@@ -71,6 +76,7 @@ struct EditRange {
   {{1, 12}, {1, 31}},   // MM:dd
   {{0, 0}, {0, 99}},    // yyyy
   {{0, 0}, {1, 9}},     // 1 : X
+  {{0, 0}, {0, 1}},     // 1 :XX
   {{0, 0}, {0, 0}},     // de-poison
 };
 
@@ -154,6 +160,9 @@ void toDigitsArray(uint8_t number1, uint8_t number2, uint8_t out[4]) {
 }
 
 void setDigits(uint8_t number1, uint8_t number2) {
+  if (displayState == DisplayState::TwentyFour) {
+    number2 = (number2 == 0) ? 12 : 24;
+  }
   toDigitsArray(number1, number2, digits);
   updateDigits();
 }
@@ -188,8 +197,13 @@ void updatePWM() {
 void getDisplayValues(uint8_t values[2]) {
   switch (displayState) {
     case DisplayState::Time:
+    case DisplayState::DePoison:
       values[0] = dateTime.hour();
       values[1] = dateTime.minute();
+      if (!editMode && !twentyFourHours) {
+        values[0] = values[0] % 12;
+        values[0] = (values[0] == 0) ? 12 : values[0];
+      }
       break;
     case DisplayState::TimeSeconds:
       values[0] = dateTime.minute();
@@ -207,9 +221,9 @@ void getDisplayValues(uint8_t values[2]) {
       values[0] = 10;
       values[1] = brightness;
       break;
-    case DisplayState::DePoison:
-      values[0] = dateTime.hour();
-      values[1] = dateTime.minute();
+    case DisplayState::TwentyFour:
+      values[0] = 20;
+      values[1] = twentyFourHours;
       break;
   }
 }
@@ -237,35 +251,40 @@ void enterEditMode() {
 
 void exitEditMode(bool save) {
   if (save) {
-    if (displayState == DisplayState::Brightness) {
-      brightness = editValues[1];
-    } else {
-      dateTime = rtc.now();
-      uint16_t year = dateTime.year();
-      uint8_t month = dateTime.month();
-      uint8_t day = dateTime.day();
-      uint8_t hour = dateTime.hour();
-      uint8_t minute = dateTime.minute();
-      uint8_t second = dateTime.second();
-      switch (displayState) {
-        case DisplayState::Time:
-          hour = editValues[0];
-          minute = editValues[1];
-          break;
-        case DisplayState::TimeSeconds:
-          minute = editValues[0];
-          second = editValues[1];
-          break;
-        case DisplayState::Date:
-          month = editValues[0];
-          day = editValues[1];
-          break;
-        case DisplayState::Year:
-          year = 2000 + editValues[1];
-          break;
-      }
-      dateTime = DateTime(year, month, day, hour, minute, second);
-      rtc.adjust(dateTime);
+    dateTime = rtc.now();
+    uint16_t year = dateTime.year();
+    uint8_t month = dateTime.month();
+    uint8_t day = dateTime.day();
+    uint8_t hour = dateTime.hour();
+    uint8_t minute = dateTime.minute();
+    uint8_t second = dateTime.second();
+    switch (displayState) {
+      case DisplayState::Time:
+        hour = editValues[0];
+        minute = editValues[1];
+        break;
+      case DisplayState::TimeSeconds:
+        minute = editValues[0];
+        second = editValues[1];
+        break;
+      case DisplayState::Date:
+        month = editValues[0];
+        day = editValues[1];
+        break;
+      case DisplayState::Year:
+        year = 2000 + editValues[1];
+        break;
+      case DisplayState::Brightness:
+        brightness = editValues[1];
+        break;
+      case DisplayState::TwentyFour:
+        twentyFourHours = editValues[1];
+        break;
+    }
+    DateTime newDateTime = DateTime(year, month, day, hour, minute, second);
+    if (newDateTime != dateTime) {
+      rtc.adjust(newDateTime);
+      dateTime = newDateTime;
     }
   }
   editMode = false;
