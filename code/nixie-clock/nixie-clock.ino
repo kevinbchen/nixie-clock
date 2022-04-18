@@ -53,15 +53,15 @@ enum DisplayState {
 // PWM patterns (including separator). Each pattern lasts for 1 second.
 uint8_t pwmPatterns[][2] = {
   {B11111, B11011},   // HH:mm
-  {B11111, B11011},   // mm:ss
+  {B11111, B11111},   // mm:ss
   {B11111, B11111},   // MM:dd
   {B11011, B11011},   // yyyy
   {B10111, B10111},   // 1 : X
-  {B11111, B11111},   // de-poison
+  {B11111, B11011},   // de-poison
 };
 uint8_t pwmPatternIndex = 0;
 
-// Value ranges when editing
+// Value ranges when editing (inclusive)
 struct EditRange {
   uint8_t min;
   uint8_t max;
@@ -75,6 +75,7 @@ struct EditRange {
 };
 
 DisplayState displayState = DisplayState::Time;
+uint8_t displayValues[] = {0, 0};
 unsigned long lastUpdateTime = 0;
 unsigned long dePoisonTime = 0;
 unsigned long dePoisonTimes[] = {1300, 2000, 2750, 3300, 5000};
@@ -148,8 +149,6 @@ void toDigitsArray(uint8_t number1, uint8_t number2, uint8_t out[4]) {
 }
 
 void setDigits(uint8_t number1, uint8_t number2) {
-  editValues[0] = number1;
-  editValues[1] = number2;
   toDigitsArray(number1, number2, digits);
   updateDigits();
 }
@@ -162,17 +161,14 @@ void updatePWM() {
     return;
   }
   uint8_t pwmBrightness = brightness * 255 / 9;
-  if (displayState == DisplayState::Brightness) {
+  if (editMode && displayState == DisplayState::Brightness) {
     pwmBrightness = editValues[1] * 255 / 9;
   }
   uint8_t pwmPattern = pwmPatterns[displayState][pwmPatternIndex];
   for (int i = 0; i < 5; i++) {
     uint8_t mask = 1 << (4 - i);
     if (pwmPattern & mask) {
-      if (false && i == 2) {
-        // INS-1 indicator seems to flicker when using pwm
-        analogWrite(pwmPins[i], 255);
-      } else if (editMode && !(editPwmMask[editIndex] & mask)) {
+      if (editMode && !(editPwmMask[editIndex] & mask)) {
         // In edit mode, set non-selected digits to be slightly dimmer
         analogWrite(pwmPins[i], pwmBrightness / 4);
       } else {
@@ -184,54 +180,69 @@ void updatePWM() {
   }
 }
 
-void updateDisplay() {
-  if (editMode) {
-    setDigits(editValues[0], editValues[1]);
-    return;
-  }
+void getDisplayValues(uint8_t values[2]) {
   switch (displayState) {
     case DisplayState::Time:
-      setDigits(dateTime.hour(), dateTime.minute());
+      values[0] = dateTime.hour();
+      values[1] = dateTime.minute();
       break;
     case DisplayState::TimeSeconds:
-      setDigits(dateTime.minute(), dateTime.second());
+      values[0] = dateTime.minute();
+      values[1] = dateTime.second();
       break;
     case DisplayState::Date:
-      setDigits(dateTime.month(), dateTime.day());
+      values[0] = dateTime.month();
+      values[1] = dateTime.day();
       break;
     case DisplayState::Year:
-      setDigits(20, dateTime.year() - 2000);
+      values[0] = 20;
+      values[1] = dateTime.year() - 2000;
       break;
     case DisplayState::Brightness:
-      setDigits(10, brightness);
+      values[0] = 10;
+      values[1] = brightness;
       break;
     case DisplayState::DePoison:
-      unsigned long deltaTime = millis() - lastUpdateTime;
-      if (deltaTime > 20) {
-        lastUpdateTime = millis();
-        dePoisonTime += deltaTime;
-        if (dePoisonTime >= dePoisonTimes[dePoisonTimeIndex]) {
-          if (dePoisonTimeIndex < 4) {
-            dePoisonDone[dePoisonPermutation[dePoisonTimeIndex]] = true;
-            toDigitsArray(dateTime.hour(), dateTime.minute(), digits);
-            dePoisonTimeIndex++;
-          } else {
-            dePoisonReset();
-            break;
-          }
-        }
-        for (int i = 0; i < 4; i++) {
-          if (!dePoisonDone[i]) {
-            digits[i] = random(0, 10);
-          }
-        }
-        updateDigits();
-      }
+      values[0] = dateTime.hour();
+      values[1] = dateTime.minute();
       break;
   }
 }
 
+
+void updateDisplay() {
+  if (editMode) {
+    setDigits(editValues[0], editValues[1]);
+  } else if (displayState == DisplayState::DePoison) {
+    unsigned long deltaTime = millis() - lastUpdateTime;
+    if (deltaTime > 20) {
+      lastUpdateTime = millis();
+      dePoisonTime += deltaTime;
+      if (dePoisonTime >= dePoisonTimes[dePoisonTimeIndex]) {
+        if (dePoisonTimeIndex < 4) {
+          dePoisonDone[dePoisonPermutation[dePoisonTimeIndex]] = true;
+          toDigitsArray(dateTime.hour(), dateTime.minute(), digits);
+          dePoisonTimeIndex++;
+        } else {
+          dePoisonReset();
+          return;
+        }
+      }
+      for (int i = 0; i < 4; i++) {
+        if (!dePoisonDone[i]) {
+          digits[i] = random(0, 10);
+        }
+      }
+      updateDigits();
+    }
+  } else {
+    getDisplayValues(displayValues);
+    setDigits(displayValues[0], displayValues[1]);
+  }
+}
+
 void enterEditMode() {
+  getDisplayValues(editValues);
   editMode = true;
   setEditIndex(1);
 }
@@ -275,10 +286,16 @@ void exitEditMode(bool save) {
 }
 
 void setEditIndex(int index) {
-  if (displayState == DisplayState::Year) {
-    // Can only edit year offset
-    index = 1;
+  // Use first valid edit index
+  for (int i = 0; i < 2; i++) {
+    if (editRanges[displayState][index].min == 0 &&
+        editRanges[displayState][index].max == 0) {
+      index = (index + 1) % 2;
+      continue;
+    }
+    break;
   }
+
   editIndex = index;
   updatePWM();
 }
