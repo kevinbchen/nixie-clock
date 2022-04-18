@@ -1,4 +1,5 @@
 #include <Button.h>
+#include <EEPROM.h>
 #include <RotaryEncoder.h>
 #include <RTClib.h>
 
@@ -35,8 +36,11 @@ DateTime dateTime;
 DateTime prevDateTime;
 
 // Settings
-uint8_t brightness = 5;
-bool twentyFourHours = true;
+// Note: This is read/written to EEPROM
+struct Settings {
+  uint8_t brightness;
+  bool twentyFourHours;
+} settings;
 
 // Digits
 uint16_t digitsData = 0x0000;
@@ -131,6 +135,13 @@ void setup() {
   }
   dateTime = rtc.now();
 
+  EEPROM.get(0, settings); 
+  if (settings.brightness == 0xFF) {
+    // Default values if no data in EEPROM
+    settings.brightness = 5;
+    settings.twentyFourHours = true;    
+  }
+
   Serial.begin(9600);
   Serial.println(dateTime.toString("Current time: YYMMDD-hh:mm:ss"));
 
@@ -174,7 +185,7 @@ void updatePWM() {
     }
     return;
   }
-  uint8_t pwmBrightness = brightness * 255 / 9;
+  uint8_t pwmBrightness = settings.brightness * 255 / 9;
   if (editMode && displayState == DisplayState::Brightness) {
     pwmBrightness = editValues[1] * 255 / 9;
   }
@@ -200,7 +211,7 @@ void getDisplayValues(uint8_t values[2]) {
     case DisplayState::DePoison:
       values[0] = dateTime.hour();
       values[1] = dateTime.minute();
-      if (!editMode && !twentyFourHours) {
+      if (!editMode && !settings.twentyFourHours) {
         values[0] = values[0] % 12;
         values[0] = (values[0] == 0) ? 12 : values[0];
       }
@@ -219,11 +230,11 @@ void getDisplayValues(uint8_t values[2]) {
       break;
     case DisplayState::Brightness:
       values[0] = 10;
-      values[1] = brightness;
+      values[1] = settings.brightness;
       break;
     case DisplayState::TwentyFour:
       values[0] = 20;
-      values[1] = twentyFourHours;
+      values[1] = settings.twentyFourHours;
       break;
   }
 }
@@ -275,10 +286,12 @@ void exitEditMode(bool save) {
         year = 2000 + editValues[1];
         break;
       case DisplayState::Brightness:
-        brightness = editValues[1];
+        settings.brightness = editValues[1];
+        EEPROM.put(0, settings);
         break;
       case DisplayState::TwentyFour:
-        twentyFourHours = editValues[1];
+        settings.twentyFourHours = editValues[1];
+        EEPROM.put(0, settings);        
         break;
     }
     DateTime newDateTime = DateTime(year, month, day, hour, minute, second);
