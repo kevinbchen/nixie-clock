@@ -241,6 +241,7 @@ void exitEditMode(bool save) {
     if (displayState == DisplayState::Brightness) {
       brightness = editValues[1];
     } else {
+      dateTime = rtc.now();
       uint16_t year = dateTime.year();
       uint8_t month = dateTime.month();
       uint8_t day = dateTime.day();
@@ -264,7 +265,8 @@ void exitEditMode(bool save) {
           year = 2000 + editValues[1];
           break;
       }
-      rtc.adjust(DateTime(year, month, day, hour, minute, second));
+      dateTime = DateTime(year, month, day, hour, minute, second);
+      rtc.adjust(dateTime);
     }
   }
   editMode = false;
@@ -314,7 +316,7 @@ void loop() {
 
   // Check encoder
   encoder.tick();
-  int encoderDelta = -(encoder.getPosition() - lastEncoderPosition);
+  int encoderDelta = (encoder.getPosition() - lastEncoderPosition);
   lastEncoderPosition = encoder.getPosition();
 
   // Update pwm pattern
