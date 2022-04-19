@@ -39,7 +39,8 @@ DateTime prevDateTime;
 // Note: This is read/written to EEPROM
 struct Settings {
   uint8_t brightness;
-  bool twentyFourHours;
+  uint8_t numHoursIdx;
+  uint8_t dePoisonPeriodIdx;
 } settings;
 
 // Digits
@@ -48,13 +49,14 @@ uint8_t digits[4] = {0};
 
 // Main display states
 enum DisplayState {
-  Time = 0,     // HH:mm
-  TimeSeconds,  // mm:ss
-  Date,         // MM:dd
-  Year,         // yyyy
-  Brightness,   // 1 : X
-  TwentyFour,   // 1 :XX
-  DePoison,     // de-poison
+  Time = 0,         // HH:mm
+  TimeSeconds,      // mm:ss
+  Date,             // MM:dd
+  Year,             // yyyy
+  Brightness,       // 1 : brightness
+  NumHours,         // 2 : num hours (12/24)
+  DePoisonPeriod,   // 3 : de-poison period
+  DePoison,         // de-poison
   NumStates
 };
 
@@ -64,23 +66,29 @@ uint8_t pwmPatterns[][2] = {
   {B11111, B11111},   // mm:ss
   {B11111, B11111},   // MM:dd
   {B11011, B11011},   // yyyy
-  {B10111, B10111},   // 1 : X
-  {B10111, B10111},   // 1 :XX
+  {B10111, B10111},   // 1 : brightness
+  {B10111, B10111},   // 2 : num hours (12/24)
+  {B10111, B10111},   // 3 : de-poison period
   {B11111, B11011},   // de-poison
 };
 uint8_t pwmPatternIndex = 0;
 
 // Value ranges when editing (inclusive)
 struct EditRange {
-  uint8_t min;
-  uint8_t max;
-} editRanges[][2] = {
+  uint8_t minVal;
+  uint8_t maxVal;
+};
+
+const uint8_t numHoursChoices[] = {12, 24};
+const uint8_t dePoisonPeriodChoices[] = {0, 15, 30, 60};
+EditRange editRanges[][2] = {
   {{0, 23}, {0, 59}},   // HH:mm
   {{0, 59}, {0, 59}},   // mm:ss
   {{1, 12}, {1, 31}},   // MM:dd
   {{0, 0}, {0, 99}},    // yyyy
-  {{0, 0}, {1, 9}},     // 1 : X
-  {{0, 0}, {0, 1}},     // 1 :XX
+  {{0, 0}, {1, 9}},     // 1 : brightness
+  {{0, 0}, {0, 1}},     // 2 : num hours (12/24)
+  {{0, 0}, {0, 3}},     // 3 : de-poison period
   {{0, 0}, {0, 0}},     // de-poison
 };
 
@@ -135,12 +143,14 @@ void setup() {
   }
   dateTime = rtc.now();
 
-  EEPROM.get(0, settings); 
+  EEPROM.get(0, settings);
   if (settings.brightness == 0xFF) {
     // Default values if no data in EEPROM
     settings.brightness = 5;
-    settings.twentyFourHours = true;    
+    settings.numHoursIdx = 1; // 24 hours
+    settings.dePoisonPeriodIdx = 3; // 60 minutes
   }
+  dePoisonPeriodMinutes = dePoisonPeriodChoices[settings.dePoisonPeriodIdx];
 
   Serial.begin(9600);
   Serial.println(dateTime.toString("Current time: YYMMDD-hh:mm:ss"));
@@ -171,23 +181,23 @@ void toDigitsArray(uint8_t number1, uint8_t number2, uint8_t out[4]) {
 }
 
 void setDigits(uint8_t number1, uint8_t number2) {
-  if (displayState == DisplayState::TwentyFour) {
-    number2 = (number2 == 0) ? 12 : 24;
+  if (displayState == DisplayState::NumHours) {
+    number2 = numHoursChoices[number2];
+  } else if (displayState == DisplayState::DePoisonPeriod) {
+    number2 = dePoisonPeriodChoices[number2];
   }
   toDigitsArray(number1, number2, digits);
   updateDigits();
 }
 
 void updatePWM() {
-  if (dePoisonMode && !editMode) {
-    for (int i = 0; i < 5; i++) {
-      analogWrite(pwmPins[i], 255);
-    }
-    return;
-  }
   uint8_t pwmBrightness = settings.brightness * 255 / 9;
   if (editMode && displayState == DisplayState::Brightness) {
     pwmBrightness = editValues[1] * 255 / 9;
+  }
+  if (dePoisonMode && !editMode) {
+    // Max brightness when de-poisoning
+    pwmBrightness = 255;
   }
   uint8_t pwmPattern = pwmPatterns[displayState][pwmPatternIndex];
   for (int i = 0; i < 5; i++) {
@@ -211,7 +221,7 @@ void getDisplayValues(uint8_t values[2]) {
     case DisplayState::DePoison:
       values[0] = dateTime.hour();
       values[1] = dateTime.minute();
-      if (!editMode && !settings.twentyFourHours) {
+      if (!editMode && numHoursChoices[settings.numHoursIdx] == 12) {
         values[0] = values[0] % 12;
         values[0] = (values[0] == 0) ? 12 : values[0];
       }
@@ -232,9 +242,13 @@ void getDisplayValues(uint8_t values[2]) {
       values[0] = 10;
       values[1] = settings.brightness;
       break;
-    case DisplayState::TwentyFour:
+    case DisplayState::NumHours:
       values[0] = 20;
-      values[1] = settings.twentyFourHours;
+      values[1] = settings.numHoursIdx;
+      break;
+    case DisplayState::DePoisonPeriod:
+      values[0] = 30;
+      values[1] = settings.dePoisonPeriodIdx;
       break;
   }
 }
@@ -289,9 +303,14 @@ void exitEditMode(bool save) {
         settings.brightness = editValues[1];
         EEPROM.put(0, settings);
         break;
-      case DisplayState::TwentyFour:
-        settings.twentyFourHours = editValues[1];
-        EEPROM.put(0, settings);        
+      case DisplayState::NumHours:
+        settings.numHoursIdx = editValues[1];
+        EEPROM.put(0, settings);
+        break;
+      case DisplayState::DePoisonPeriod:
+        settings.dePoisonPeriodIdx = editValues[1];
+        dePoisonPeriodMinutes = dePoisonPeriodChoices[settings.dePoisonPeriodIdx];
+        EEPROM.put(0, settings);
         break;
     }
     DateTime newDateTime = DateTime(year, month, day, hour, minute, second);
@@ -308,8 +327,8 @@ void exitEditMode(bool save) {
 void setEditIndex(int index) {
   // Use first valid edit index
   for (int i = 0; i < 2; i++) {
-    if (editRanges[displayState][index].min == 0 &&
-        editRanges[displayState][index].max == 0) {
+    if (editRanges[displayState][index].minVal == 0 &&
+        editRanges[displayState][index].maxVal == 0) {
       index = (index + 1) % 2;
       continue;
     }
@@ -411,7 +430,8 @@ void loop() {
     updatePWM();
 
     // Enable de-poison if needed
-    if (dateTime.minute() != prevDateTime.minute() &&
+    if (dePoisonPeriodMinutes > 0 &&
+        dateTime.minute() != prevDateTime.minute() &&
         dateTime.minute() % dePoisonPeriodMinutes == 0) {
       dePoisonStart();
     }
@@ -447,13 +467,13 @@ void loop() {
 
     if (encoderDelta != 0) {
       int value = editValues[editIndex];
-      int min = editRanges[displayState][editIndex].min;
-      int max = editRanges[displayState][editIndex].max;
-      int mod = max + 1 - min;
+      int minVal = editRanges[displayState][editIndex].minVal;
+      int maxVal = editRanges[displayState][editIndex].maxVal;
+      int mod = maxVal + 1 - minVal;
       if (encoderDelta < 0) {
         encoderDelta = encoderDelta - encoderDelta * mod;
       }
-      editValues[editIndex] = (value - min + encoderDelta) % mod + min;
+      editValues[editIndex] = (value - minVal + encoderDelta) % mod + minVal;
       updateDisplay();
       if (displayState == DisplayState::Brightness) {
         updatePWM();
